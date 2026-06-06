@@ -3,7 +3,7 @@
 // Provides the Supabase client and auth state to the entire app.
 
 import { createContext, useContext, useEffect, useState } from "react";
-import { createSupabaseBrowserClient } from "@/lib/supabase";
+import { createBrowserClient } from "@supabase/ssr";
 import type { Session, User, SupabaseClient } from "@supabase/supabase-js";
 
 interface SupabaseContextType {
@@ -18,7 +18,12 @@ const SupabaseContext = createContext<SupabaseContextType | undefined>(
 );
 
 export function SupabaseProvider({ children }: { children: React.ReactNode }) {
-  const [supabase] = useState(() => createSupabaseBrowserClient());
+  const [supabase] = useState(() =>
+  createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+);
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);

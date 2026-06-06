@@ -103,9 +103,7 @@ function LoginForm() {
           Roundup
         </h1>
         <p style={{ textAlign: "center", fontSize: 14, color: "#9099b5", marginBottom: 32 }}>
-          {usePassword
-            ? "Sign in with email + password."
-            : "Sign in with your email — magic link, no password."}
+          {usePassword ? "Sign in with email + password." : "Sign in with your email - magic link, no password."}
         </p>
         <input
           type="email"
@@ -138,9 +136,7 @@ function LoginForm() {
             opacity: loading || !email.trim() || (usePassword && !password.trim()) ? 0.5 : 1,
           }}
         >
-          {loading
-            ? usePassword ? "Signing in…" : "Sending…"
-            : usePassword ? "Sign in →" : "Send magic link →"}
+          {loading ? (usePassword ? "Signing in..." : "Sending...") : (usePassword ? "Sign in" : "Send magic link")}
         </button>
         <p
           onClick={() => { setUsePassword(!usePassword); setError(""); }}
