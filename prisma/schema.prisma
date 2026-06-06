@@ -1,0 +1,163 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── USERS ────────────────────────────────────────────────────────
+
+model User {
+  id               String   @id @default(cuid())
+  supabaseId       String   @unique  // maps to auth.users.id
+  name             String
+  email            String   @unique
+  telegramChatId   String?  @unique
+  telegramUsername String?
+  timezone         String   @default("Asia/Kolkata")
+  privacyDefault   PrivacyMode @default(MINIMAL)
+  totalSessions    Int      @default(0)
+  totalSuccesses   Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  friends  Friend[]
+  sessions SleepSession[]
+}
+
+// ─── FRIENDS ──────────────────────────────────────────────────────
+
+model Friend {
+  id               String    @id @default(cuid())
+  ownerId          String
+  name             String
+  phone            String?
+  channel          NotifyChannel @default(TELEGRAM)
+  telegramChatId   String?
+  telegramUsername String?
+  linkToken        String    @unique @default(cuid())
+  linkedAt         DateTime?
+  timezone         String    @default("Asia/Kolkata")
+  totalWatches     Int       @default(0)
+  totalSaves       Int       @default(0)
+  lastActive       DateTime?
+  createdAt        DateTime  @default(now())
+
+  owner    User           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tokens   WatcherToken[]
+
+  @@index([ownerId])
+}
+
+// ─── SLEEP SESSIONS ───────────────────────────────────────────────
+
+model SleepSession {
+  id                String        @id @default(cuid())
+  userId            String
+  wakeAt            DateTime
+  sleepAt           DateTime      @default(now())
+  status            SessionStatus @default(SCHEDULED)
+  reason            WakeReason?
+  privacyMode       PrivacyMode   @default(MINIMAL)
+  openWatchLink     Boolean       @default(false)
+  openWatchToken    String?       @unique @default(cuid())
+  confirmToken      String        @unique @default(cuid())
+  confirmedAt       DateTime?     // first tap
+  secondConfirmedAt DateTime?     // second proof (drag slider)
+  roundsEscalated      Int           @default(0)
+  roundTwoStartedAt    DateTime?
+  alarmFiredAt      DateTime?
+  sessionEndedAt    DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokens  WatcherToken[]
+  events  EscalationEvent[]
+
+  @@index([userId])
+  @@index([status, wakeAt])
+  // FIX #13: These indexes are used by checkFirstConfirms() and checkRoundTwo() in cron.ts.
+  // Without them, those queries do a full sequential scan on every cron cycle.
+  @@index([status, alarmFiredAt])
+  @@index([status, roundTwoStartedAt])
+}
+
+// ─── WATCHER TOKENS ───────────────────────────────────────────────
+
+model WatcherToken {
+  id           String    @id @default(cuid())
+  sessionId    String
+  friendId     String
+  token        String    @unique @default(cuid())
+  committed    Boolean   @default(false)
+  committedAt  DateTime?
+  markedAwake  Boolean   @default(false)
+  markedAt     DateTime?
+  createdAt    DateTime  @default(now())
+
+  session SleepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  friend  Friend       @relation(fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([token])
+}
+
+// ─── ESCALATION EVENTS (audit log) ───────────────────────────────
+
+model EscalationEvent {
+  id          String   @id @default(cuid())
+  sessionId   String
+  type        EscalationType
+  triggeredAt DateTime @default(now())
+  sentTo      String[]
+
+  session SleepSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────
+
+enum SessionStatus {
+  SCHEDULED
+  ALARM_FIRED
+  FIRST_CONFIRMED
+  ROUND_TWO
+  CONFIRMED
+  FAILED
+  CANCELLED
+}
+
+enum EscalationType {
+  SESSION_CREATED
+  ALARM_FIRED
+  FIRST_CONFIRMED
+  ROUND_TWO
+  CONFIRMED
+  FAILED
+}
+
+enum PrivacyMode {
+  OPEN
+  MINIMAL
+  ANONYMOUS
+}
+
+enum NotifyChannel {
+  TELEGRAM
+  WHATSAPP
+  SMS
+  PUSH
+}
+
+enum WakeReason {
+  EXAM
+  FLIGHT
+  MEETING
+  WORKOUT
+  OTHER
+}
