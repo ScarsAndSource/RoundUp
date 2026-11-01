@@ -81,6 +81,7 @@ export async function GET(
         committed: false,
         markedAwake: false,
         friendName: "Anonymous watcher",
+        viewOnly: true,
         alarmFiredAt: session.alarmFiredAt?.toISOString() ?? null,
         roundsEscalated: session.roundsEscalated,
       };

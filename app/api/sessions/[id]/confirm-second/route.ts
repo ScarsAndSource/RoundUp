@@ -109,7 +109,8 @@ export async function POST(
       });
       await sendFriendConversionPrompt({
         chatId: wt.friend.telegramChatId,
-        sleeperName: session.user.name,
+        sleeperName:
+          session.privacyMode === "ANONYMOUS" ? "Someone" : session.user.name,
       });
     });
 

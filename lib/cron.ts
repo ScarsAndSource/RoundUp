@@ -13,7 +13,17 @@
 //
 // FIX #13 (was: "Missing index on roundTwoStartedAt / alarmFiredAt"):
 //   Queries use indexed columns — schema.prisma has been updated accordingly.
+//
+// FIX #24 (was: "FIRST_CONFIRMED had no server-side timeout"):
+//   checkSecondConfirms() escalates FIRST_CONFIRMED sessions to ROUND_TWO when the
+//   second confirmation doesn't arrive within 3 minutes. Before this, a sleeper who
+//   tapped "I'm Awake" once and fell back asleep was never escalated.
+//
+// FIX #25: fireAlarms() now only flips a session that is STILL "SCHEDULED". If the
+//   sleeper already confirmed from their device (local ring) or cancelled between the
+//   read and the write, the cron leaves it alone.
 
+import type { Prisma } from "@prisma/client";
 import { db } from "./db";
 import {
   sendMessage,
@@ -28,27 +38,34 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://roundup.vercel.app";
 // Cap per-step work to avoid Vercel's 10s timeout on cold starts
 const MAX_PER_STEP = 10;
 
+type SessionWithCrew = Prisma.SleepSessionGetPayload<{
+  include: { user: true; tokens: { include: { friend: true } } };
+}>;
+
 // ── Main entry point ───────────────────────────────────────────────────
 
 export async function runAlarmCycle(): Promise<{
   fired: number;
+  secondTimeout: number;
   roundTwo: number;
   failed: number;
   expired: number;
   ts: string;
 }> {
-  const [firedR, roundTwoR, failedR, expiredR] = await Promise.allSettled([
+  const [firedR, secondR, roundTwoR, failedR, expiredR] = await Promise.allSettled([
     fireAlarms(),
+    checkSecondConfirms(),
     checkFirstConfirms(),
     checkRoundTwo(),
     expireStaleScheduled(),
   ]);
 
   return {
-    fired:    firedR.status    === "fulfilled" ? firedR.value    : 0,
-    roundTwo: roundTwoR.status === "fulfilled" ? roundTwoR.value : 0,
-    failed:   failedR.status   === "fulfilled" ? failedR.value   : 0,
-    expired:  expiredR.status  === "fulfilled" ? expiredR.value  : 0,
+    fired:         firedR.status    === "fulfilled" ? firedR.value    : 0,
+    secondTimeout: secondR.status   === "fulfilled" ? secondR.value   : 0,
+    roundTwo:      roundTwoR.status === "fulfilled" ? roundTwoR.value : 0,
+    failed:        failedR.status   === "fulfilled" ? failedR.value   : 0,
+    expired:       expiredR.status  === "fulfilled" ? expiredR.value  : 0,
     ts: new Date().toISOString(),
   };
 }
@@ -77,16 +94,22 @@ async function fireAlarms(): Promise<number> {
       const delayMs = now.getTime() - session.wakeAt.getTime();
       const delayMin = Math.round(delayMs / 60000);
 
-      // CRITICAL FIX #1: Write DB status FIRST
-      await db.$transaction([
-        db.sleepSession.update({
-          where: { id: session.id },
-          data: { status: "ALARM_FIRED", alarmFiredAt: now },
-        }),
-        db.escalationEvent.create({
+      // CRITICAL FIX #1: Write DB status FIRST.
+      // FIX #25: guarded — only flips the row if it is still SCHEDULED.
+      const { count } = await db.sleepSession.updateMany({
+        where: { id: session.id, status: "SCHEDULED" },
+        data: { status: "ALARM_FIRED", alarmFiredAt: now },
+      });
+      if (count === 0) return; // already confirmed / cancelled — nothing to fire
+
+      try {
+        await db.escalationEvent.create({
           data: { sessionId: session.id, type: "ALARM_FIRED", sentTo: [] },
-        }),
-      ]);
+        });
+      } catch (err) {
+        // Audit-log failure must never block the notifications below
+        console.error("[cron] escalationEvent ALARM_FIRED failed:", err);
+      }
 
       // THEN send Telegram — if this fails, DB is already correct, no re-fire
       const delayNote = delayMin >= 3 ? ` (${delayMin} min delayed)` : "";
@@ -138,7 +161,95 @@ async function fireAlarms(): Promise<number> {
   return sessions.length;
 }
 
-// ── Step 2: ALARM_FIRED + 5min → Round 2 ─────────────────────────────
+// ── Step 2: FIRST_CONFIRMED + 3min with no second proof → Round 2 ─────
+// FIX #24. The sleeper tapped "I'm Awake" but never completed the slider.
+// The claim key includes confirmedAt so a later re-confirm → timeout cycle
+// (user taps awake again from Round 2) is a NEW escalation, not a deduped one.
+// roundTwoStartedAt is preserved if already set, so the original 8-minute
+// Round 2 deadline is never extended by tapping "I'm Awake" repeatedly.
+
+async function checkSecondConfirms(): Promise<number> {
+  const cutoff = new Date(Date.now() - 3 * 60 * 1000);
+
+  const sessions = await db.sleepSession.findMany({
+    where: { status: "FIRST_CONFIRMED", confirmedAt: { lte: cutoff } },
+    include: { user: true, tokens: { include: { friend: true } } },
+    take: MAX_PER_STEP,
+    orderBy: { confirmedAt: "asc" },
+  });
+
+  if (sessions.length === 0) return 0;
+
+  await Promise.allSettled(
+    sessions.map(async (session: SessionWithCrew) => {
+      if (!session.confirmedAt) return;
+
+      const claimed = await claimEscalation(
+        session.id,
+        `SECOND_TIMEOUT:${session.confirmedAt.getTime()}`
+      );
+      if (!claimed) return;
+
+      // DB first, guarded — if the sleeper completed the second proof (CONFIRMED)
+      // or cancelled in the meantime, count is 0 and we do nothing.
+      const { count } = await db.sleepSession.updateMany({
+        where: { id: session.id, status: "FIRST_CONFIRMED" },
+        data: {
+          status: "ROUND_TWO",
+          roundsEscalated: { increment: 1 },
+          roundTwoStartedAt: session.roundTwoStartedAt ?? new Date(),
+        },
+      });
+      if (count === 0) return;
+
+      try {
+        await db.escalationEvent.create({
+          data: { sessionId: session.id, type: "ROUND_TWO", sentTo: [] },
+        });
+      } catch (err) {
+        console.error("[cron] escalationEvent ROUND_TWO (second timeout) failed:", err);
+      }
+
+      const sleeperName =
+        session.privacyMode === "ANONYMOUS" ? "Someone" : session.user.name;
+      const totalFriends = session.tokens.length;
+      const confirmUrl = `${APP_URL}/session/${session.id}?token=${session.confirmToken}`;
+      const notifPromises: Promise<unknown>[] = [];
+
+      if (session.user.telegramChatId) {
+        notifPromises.push(
+          sendMessage(
+            session.user.telegramChatId,
+            `🚨 <b>Round 2!</b> You tapped awake but never finished the second check. Your entire crew has been called.\n\nTap to confirm again:`,
+            {
+              reply_markup: {
+                inline_keyboard: [[{ text: "✓ I'm Awake", url: confirmUrl }]],
+              },
+            }
+          )
+        );
+      }
+
+      for (const wt of session.tokens) {
+        if (!wt.friend.telegramChatId) continue;
+        notifPromises.push(
+          notifyWatcherRoundTwo({
+            chatId: wt.friend.telegramChatId,
+            sleeperName,
+            totalFriends,
+            watchToken: wt.token,
+          })
+        );
+      }
+
+      await Promise.allSettled(notifPromises);
+    })
+  );
+
+  return sessions.length;
+}
+
+// ── Step 3: ALARM_FIRED + 5min → Round 2 ─────────────────────────────
 
 async function checkFirstConfirms(): Promise<number> {
   const cutoff = new Date(Date.now() - 5 * 60 * 1000);
@@ -213,7 +324,7 @@ async function checkFirstConfirms(): Promise<number> {
   return sessions.length;
 }
 
-// ── Step 3: ROUND_TWO + 8min → FAILED ────────────────────────────────
+// ── Step 4: ROUND_TWO + 8min → FAILED ────────────────────────────────
 
 async function checkRoundTwo(): Promise<number> {
   const cutoff = new Date(Date.now() - 8 * 60 * 1000);
@@ -275,7 +386,7 @@ async function checkRoundTwo(): Promise<number> {
   return sessions.length;
 }
 
-// ── Step 4: Expire stale SCHEDULED sessions ────────────────────────────
+// ── Step 5: Expire stale SCHEDULED sessions ────────────────────────────
 // FIX #19: Sessions whose wakeAt + 30min has passed but cron never fired them
 // (e.g. cron was down for a while) are marked FAILED with a note to the sleeper.
 

@@ -87,6 +87,7 @@ export interface WatcherPageData {
   friendName: string;
   alarmFiredAt: string | null;
   roundsEscalated: number;
+  viewOnly?: boolean; // open watch link: can look, can't commit or mark awake
 }
 
 export interface SessionHistoryItem {

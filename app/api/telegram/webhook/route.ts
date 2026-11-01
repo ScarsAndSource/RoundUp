@@ -177,7 +177,7 @@ export async function POST(req: NextRequest) {
           .map((wt) =>
             sendMessage(
               wt.friend.telegramChatId!,
-              `ℹ️ ${user.name} has cancelled their wake session. All clear!`
+              `ℹ️ ${active.privacyMode === "ANONYMOUS" ? "Someone" : user.name} has cancelled their wake session. All clear!`
             )
           )
       );

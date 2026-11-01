@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getOrCreateUser, ServiceUnavailableError } from "@/lib/supabase";
-import { isDuplicateSession } from "@/lib/redis";
+import { isDuplicateSession, sessionCreateRatelimit } from "@/lib/redis";
 import { notifyFriendSessionCreated, formatWakeTime } from "@/lib/telegram";
 import type { CreateSessionRequest, CreateSessionResponse } from "@/types";
 
@@ -73,6 +73,18 @@ export async function POST(req: NextRequest) {
         );
       }
       // If no existing session found (very unusual), fall through to create
+    }
+
+    // Per-user create limit (5 per 10 min). Duplicate double-taps already returned above,
+    // so only genuinely new sessions are counted.
+    if (sessionCreateRatelimit) {
+      const { success } = await sessionCreateRatelimit.limit(user.id);
+      if (!success) {
+        return NextResponse.json(
+          { error: "Too many sessions created. Try again in a few minutes." },
+          { status: 429, headers: { "Retry-After": "60" } }
+        );
+      }
     }
 
     let friends: { id: string }[] = [];

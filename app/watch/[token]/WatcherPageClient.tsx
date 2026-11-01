@@ -127,6 +127,7 @@ export default function WatcherPageClient({ token }: { token: string }) {
   const isEnded = ["CONFIRMED", "FAILED", "CANCELLED"].includes(data.status);
   const isAlarming = ["ALARM_FIRED", "FIRST_CONFIRMED", "ROUND_TWO"].includes(data.status);
   const isRoundTwo = data.status === "ROUND_TWO";
+  const viewOnly = data.viewOnly === true;
 
   // ── SAVED state ──────────────────────────────────────────────
   if (markedAwake || data.status === "CONFIRMED") {
@@ -170,7 +171,7 @@ export default function WatcherPageClient({ token }: { token: string }) {
           <div style={{ fontSize: 56, marginBottom: 16 }}>📋</div>
           <h2 style={{ fontFamily: "var(--font-display)", fontSize: 22, fontWeight: 700, marginBottom: 8 }}>This session has ended</h2>
           <p style={{ fontSize: 14, color: "var(--text-2)", marginBottom: 24 }}>
-            {data.status === "CONFIRMED" ? `${data.sleeperName} is awake. All good!` : "The session timed out."}
+            {data.status === "CANCELLED" ? `${data.sleeperName} cancelled the session. All clear!` : "The session timed out."}
           </p>
           <a href={APP_URL} style={{ display: "block", padding: "14px", background: "var(--surface)", border: "1px solid var(--border-2)", borderRadius: "var(--r-lg)", textAlign: "center", color: "var(--text-2)", fontSize: 14, textDecoration: "none" }}>
             Open Roundup →
@@ -205,7 +206,11 @@ export default function WatcherPageClient({ token }: { token: string }) {
               {isRoundTwo && <div style={{ marginTop: 10, fontSize: 13, color: "var(--red)", fontWeight: 500 }}>Hasn't confirmed awake. Call them immediately.</div>}
             </div>
 
-            {!committed ? (
+            {viewOnly ? (
+              <div style={{ padding: "12px 16px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-md)", marginBottom: 12, fontSize: 13, color: "var(--text-2)", textAlign: "center" }}>
+                View-only link. Only friends added to this session can commit or mark awake.
+              </div>
+            ) : !committed ? (
               <button onClick={handleCommit} disabled={actioning} style={{ ...pBtn, marginBottom: 12, boxShadow: "0 8px 32px rgba(245,166,35,0.4)" }}>
                 {actioning ? "…" : "✓ I'll watch — commit"}
               </button>
@@ -215,10 +220,14 @@ export default function WatcherPageClient({ token }: { token: string }) {
               </div>
             )}
 
+            {!viewOnly && (
+            <>
             <button onClick={handleMarkAwake} disabled={actioning} style={{ width: "100%", padding: "18px", background: "var(--red)", borderRadius: "var(--r-xl)", border: "none", cursor: "pointer", fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 700, color: "#fff", animation: "pulse-ring 1.5s ease-in-out infinite", boxShadow: "0 8px 32px rgba(255,69,69,0.4)" }}>
               {actioning ? "…" : `📞 I've reached ${data.sleeperName} — Mark awake`}
             </button>
             <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-3)", marginTop: 8 }}>Only tap after confirming with {data.sleeperName} directly</p>
+            </>
+            )}
           </div>
         </div>
       </div>
@@ -254,7 +263,11 @@ export default function WatcherPageClient({ token }: { token: string }) {
             {data.reason && <div style={{ marginTop: 8, display: "inline-block", padding: "3px 10px", background: "var(--amber-glow)", borderRadius: 20, color: "var(--amber)", fontSize: 12 }}>{data.reason.toLowerCase()}</div>}
           </div>
 
-          {committed ? (
+          {viewOnly ? (
+            <div style={{ padding: "12px 14px", background: "var(--surface-2)", border: "1px solid var(--border)", borderRadius: "var(--r-md)", marginBottom: 10, fontSize: 12, color: "var(--text-2)", textAlign: "center" }}>
+              View-only link. Only friends added to this session can commit.
+            </div>
+          ) : committed ? (
             <div style={{ padding: "12px 14px", background: "var(--green-glow)", border: "1px solid rgba(46,204,113,0.33)", borderRadius: "var(--r-md)", display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
               <span style={{ fontSize: 18 }}>✓</span>
               <div style={{ flex: 1 }}>

@@ -22,7 +22,14 @@ export async function POST(req: NextRequest) {
     });
 
     if (!wt) {
-      return NextResponse.json({ error: "Watch token not found" }, { status: 404 });
+      const openSession = await db.sleepSession.findUnique({
+      where: { openWatchToken: token },
+      select: { id: true },
+    });
+    if (openSession) {
+      return NextResponse.json({ error: "This is a view-only link" }, { status: 403 });
+    }
+    return NextResponse.json({ error: "Watch token not found" }, { status: 404 });
     }
 
     // Idempotent — already committed is fine
@@ -43,7 +50,7 @@ export async function POST(req: NextRequest) {
       );
       await sendMessage(
         wt.friend.telegramChatId,
-        `✅ Commitment logged! You'll get an alert if ${wt.session.user.name} doesn't wake up by ${wakeStr}.`
+        `✅ Commitment logged! You'll get an alert if ${wt.session.privacyMode === "ANONYMOUS" ? "Someone" : wt.session.user.name} doesn't wake up by ${wakeStr}.`
       );
     }
 

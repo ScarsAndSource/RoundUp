@@ -85,7 +85,9 @@ export async function POST(req: NextRequest) {
     });
 
     const inviteLink = `https://t.me/${
-      process.env.TELEGRAM_BOT_USERNAME ?? "roundupbot"
+      process.env.TELEGRAM_BOT_USERNAME ??
+      process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ??
+      "roundupbot"
     }?start=friend_${friend.linkToken}`;
 
     const result: FriendPublic = {

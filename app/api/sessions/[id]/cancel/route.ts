@@ -34,7 +34,7 @@ export async function POST(
       if (wt.friend.telegramChatId) {
         await sendMessage(
           wt.friend.telegramChatId,
-          `ℹ️ ${user.name} has cancelled their wake session. All clear!`
+          `ℹ️ ${session.privacyMode === "ANONYMOUS" ? "Someone" : user.name} has cancelled their wake session. All clear!`
         );
       }
     });

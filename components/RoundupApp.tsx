@@ -69,6 +69,50 @@ const CSS = `
 /* ─── UTILS ─────────────────────────────────────────────────────── */
 const fmt2 = (n: number) => String(n).padStart(2, "0");
 
+/* ─── AUDIO ──────────────────────────────────────────────────────── */
+// Pre-unlock on any user gesture (e.g. "Sleep now" click).
+// Web Audio API requires a prior user interaction before playing.
+let _audioCtx: AudioContext | null = null;
+
+function unlockAudio() {
+  try {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as Record<string, typeof AudioContext>).webkitAudioContext;
+    if (!_audioCtx) _audioCtx = new AC();
+    if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+  } catch { /* not supported */ }
+}
+
+/** Returns true if the beep actually played. */
+function playAlarmBeep(): boolean {
+  if (!_audioCtx || _audioCtx.state !== "running") return false;
+  try {
+    const ctx = _audioCtx;
+    const t = ctx.currentTime;
+    // 3 sharp double-tone beeps spaced 350ms apart
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "square";
+      osc.frequency.setValueAtTime(880, t + i * 0.35);
+      osc.frequency.setValueAtTime(660, t + i * 0.35 + 0.12);
+      gain.gain.setValueAtTime(0.5, t + i * 0.35);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.35 + 0.32);
+      osc.start(t + i * 0.35);
+      osc.stop(t + i * 0.35 + 0.32);
+    }
+    return true;
+  } catch { return false; }
+}
+
+/** Vibrate pattern for mobile browsers (no-op on desktop). */
+function vibrateAlarm() {
+  try { navigator.vibrate?.([400, 150, 400, 150, 600]); } catch { }
+}
+
 function useTimer(targetMs: number, active: boolean) {
   const [remaining, setRemaining] = useState(targetMs);
   useEffect(() => {
@@ -464,6 +508,36 @@ function ActiveSession({ config, onAlarmFired, onCancel, friends }: {
   const onAlarmFiredRef = useRef(onAlarmFired);
   useEffect(() => { onAlarmFiredRef.current = onAlarmFired; }, [onAlarmFired]);
 
+  // Ring on this device at wake time — don't wait for cron + the 5s poll (cron can be ~2 min late).
+  useEffect(() => {
+    const ms = Math.max(0, new Date(config.wakeAt).getTime() - Date.now());
+    const t = setTimeout(() => onAlarmFiredRef.current(), ms);
+    return () => clearTimeout(t);
+  }, [config.wakeAt]);
+
+  // Keep the screen awake while waiting so the phone doesn't sleep through the alarm.
+  useEffect(() => {
+    let lock: WakeLockSentinel | null = null;
+    let cancelled = false;
+    const acquire = async () => {
+      try {
+        if (!("wakeLock" in navigator) || lock) return;
+        const l = await navigator.wakeLock.request("screen");
+        if (cancelled) { l.release().catch(() => {}); return; }
+        lock = l;
+        l.addEventListener("release", () => { if (lock === l) lock = null; });
+      } catch { /* denied or unsupported — Telegram is still the backstop */ }
+    };
+    const onVisible = () => { if (document.visibilityState === "visible") acquire(); };
+    acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      lock?.release().catch(() => {});
+    };
+  }, []);
+
   useEffect(() => {
     let iv: ReturnType<typeof setInterval> | null = null;
     let cancelled = false;
@@ -569,12 +643,30 @@ function AlarmFiring({ config, onConfirm, onRoundTwo }: {
 }) {
   const { remaining, mins, secs, done } = useTimer(5 * 60 * 1000, true);
   const [confirming, setConfirming] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState<boolean | null>(null);
   const onRoundTwoRef = useRef(onRoundTwo);
   useEffect(() => { onRoundTwoRef.current = onRoundTwo; }, [onRoundTwo]);
 
   useEffect(() => {
     if (done) onRoundTwoRef.current();
   }, [done]);
+
+  // ── Sound: attempt on mount, start loop if successful ──────────
+  useEffect(() => {
+    vibrateAlarm();
+    unlockAudio();
+    const played = playAlarmBeep();
+    setSoundEnabled(played);
+  }, []);
+
+  useEffect(() => {
+    if (!soundEnabled) return;
+    const iv = setInterval(() => {
+      vibrateAlarm();
+      playAlarmBeep();
+    }, 2500);
+    return () => clearInterval(iv);
+  }, [soundEnabled]);
 
   const handleConfirm = async () => {
     setConfirming(true);
@@ -605,6 +697,14 @@ function AlarmFiring({ config, onConfirm, onRoundTwo }: {
         <span style={{ fontFamily: "var(--font-display)", fontSize: 16, fontWeight: 700, color: "var(--red)" }}>{fmt2(mins)}:{fmt2(secs)}</span>
         <span style={{ fontSize: 12, color: "var(--text-2)" }}> if not confirmed</span>
       </div>
+      {soundEnabled === false && (
+        <button
+          onClick={() => { unlockAudio(); setSoundEnabled(true); }}
+          style={{ width: "100%", padding: "14px", borderRadius: "var(--r-md)", background: "rgba(255,69,69,0.12)", border: "1px solid rgba(255,69,69,0.45)", color: "var(--red)", fontSize: 14, cursor: "pointer", fontFamily: "var(--font-body)", marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+        >
+          🔊 Tap to enable alarm sound
+        </button>
+      )}
       <button onClick={handleConfirm} disabled={confirming} style={{ width: "100%", padding: "22px", background: "var(--amber)", borderRadius: "var(--r-xl)", border: "none", cursor: "pointer", fontFamily: "var(--font-display)", fontSize: 20, fontWeight: 700, color: "#0a0b0f", boxShadow: "0 8px 32px rgba(245,166,35,0.45)", animation: "pulse-ring 2s ease-in-out infinite", marginBottom: 12 }}>
         {confirming ? "Confirming…" : "✓ I'm Awake"}
       </button>
@@ -989,7 +1089,8 @@ function TelegramSetup({ userProfile, onBack, onLinked }: {
   const handleLinked = useCallback(async () => {
     setChecking(true);
     let attempts = 0;
-    const maxAttempts = 12; // 12 * 5s = 60s
+    const maxAttempts = 30; // 30 × 2s = 60s total, but 2s intervals feel instant
+
     const poll = async (): Promise<void> => {
       try {
         const profile = await api.getUserProfile();
@@ -998,14 +1099,14 @@ function TelegramSetup({ userProfile, onBack, onLinked }: {
           onLinked();
           return;
         }
-      } catch { /* ignore */ }
+      } catch { /* ignore network errors — keep polling */ }
       attempts++;
       setPollCount(attempts);
       if (attempts < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 5000));
+        await new Promise((r) => setTimeout(r, 2000));
         return poll();
       }
-      // Timed out — still call onLinked so user isn't stuck
+      // Timed out — don't leave user stuck; proceed anyway
       setChecking(false);
       onLinked();
     };
@@ -1034,12 +1135,22 @@ function TelegramSetup({ userProfile, onBack, onLinked }: {
         ✈️ Open @{botUsername}
       </a>
       <button onClick={handleLinked} disabled={checking} style={{ width: "100%", padding: "14px", borderRadius: "var(--r-md)", background: checking ? "var(--surface-3)" : "var(--surface-2)", border: "1px solid var(--border-2)", color: checking ? "var(--text-3)" : "var(--text-2)", fontSize: 14, cursor: checking ? "default" : "pointer", transition: "all 0.2s" }}>
-        {checking ? `Checking… (${pollCount})` : "✓ I've linked it — done"}
+        {checking ? `Checking… (${pollCount * 2}s)` : "✓ I've linked it — done"}
       </button>
       {checking && (
-        <p style={{ textAlign: "center", fontSize: 11, color: "var(--text-3)", marginTop: 10 }}>
-          Waiting for Telegram confirmation… this takes a few seconds after you tap Start.
-        </p>
+        <div style={{ marginTop: 10, textAlign: "center" }}>
+          <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: pollCount >= 8 ? 10 : 0 }}>
+            Open the bot above → tap <strong style={{ color: "var(--text-2)" }}>Start</strong> → come back here
+          </p>
+          {pollCount >= 8 && (
+            <button
+              onClick={() => { setChecking(false); onLinked(); }}
+              style={{ padding: "6px 18px", borderRadius: 20, background: "transparent", border: "1px solid var(--border-2)", color: "var(--text-3)", fontSize: 12, cursor: "pointer", fontFamily: "var(--font-body)" }}
+            >
+              Skip for now →
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -1284,6 +1395,7 @@ export default function RoundupApp() {
     selectedFriendIds: string[]; reason: WakeReason | null;
     privacy: PrivacyMode; openWatch: boolean;
   }) => {
+    unlockAudio(); // pre-unlock AudioContext on this user gesture so alarm can play later
     const now = new Date();
     let h = cfg.hour;
     if (cfg.ampm === "PM" && h !== 12) h += 12;
