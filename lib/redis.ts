@@ -75,3 +75,17 @@ export async function claimEscalation(
   const result = await redis.set(key, "1", { nx: true, ex: 3600 }); // 1hr TTL
   return result !== null; // "OK" = we claimed it first
 }
+
+// Release a claim when the work it guarded FAILED (e.g. a transient DB error) so the next
+// cron run can retry the step instead of being locked out for the claim's whole 1-hour TTL.
+export async function releaseEscalation(
+  sessionId: string,
+  step: string
+): Promise<void> {
+  if (!redis) return;
+  try {
+    await redis.del(`esc:${sessionId}:${step}`);
+  } catch {
+    // best effort — worst case the TTL expires on its own
+  }
+}
