@@ -1,7 +1,12 @@
 // app/api/sessions/[id]/confirm-second/route.ts
-// FIX #2 (Critical): Optimistic concurrency guard prevents double stat increments
-//         when confirm-second and mark-awake race each other.
-//         updateMany with `status: { not: "CONFIRMED" }` ensures only ONE writer wins.
+//
+// The SECOND proof of being awake. Rules (all enforced here, not just in the UI):
+//   - only valid after a real first tap (status FIRST_CONFIRMED) — no skipping it;
+//   - only valid at least 2 minutes after that first tap (otherwise "prove you're still
+//     awake" is just two quick half-asleep taps);
+//   - the status flip is a guarded updateMany: if a friend marked you awake, or the cron
+//     escalated / failed the session, in the meantime, exactly one writer wins and stats
+//     are counted once.
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
@@ -11,6 +16,8 @@ import {
   sendFriendConversionPrompt,
   formatDuration,
 } from "@/lib/telegram";
+
+const MIN_GAP_MS = 2 * 60 * 1000;
 
 export async function POST(
   req: NextRequest,
@@ -24,11 +31,7 @@ export async function POST(
     }
 
     const session = await db.sleepSession.findFirst({
-      where: {
-        id: params.id,
-        confirmToken: token,
-        status: { in: ["FIRST_CONFIRMED", "ROUND_TWO", "ALARM_FIRED"] },
-      },
+      where: { id: params.id, confirmToken: token, status: "FIRST_CONFIRMED" },
       include: {
         user: true,
         tokens: { include: { friend: true } },
@@ -36,14 +39,16 @@ export async function POST(
     });
 
     if (!session) {
-      // FIX #20: Distinct message for already-confirmed sessions
-      const terminal = await db.sleepSession.findFirst({
-        where: { id: params.id, confirmToken: token, status: "CONFIRMED" },
+      const other = await db.sleepSession.findFirst({
+        where: { id: params.id, confirmToken: token },
       });
-      if (terminal) {
+      if (other?.status === "CONFIRMED") {
+        return NextResponse.json({ ok: true, alreadyConfirmed: true, status: "CONFIRMED" });
+      }
+      if (other && (other.status === "FAILED" || other.status === "CANCELLED")) {
         return NextResponse.json(
-          { ok: true, alreadyConfirmed: true, status: "CONFIRMED" },
-          { status: 200 }
+          { error: "SESSION_ENDED", status: other.status },
+          { status: 400 }
         );
       }
       return NextResponse.json(
@@ -53,16 +58,20 @@ export async function POST(
     }
 
     const now = new Date();
+    const sinceFirstMs = session.confirmedAt
+      ? now.getTime() - session.confirmedAt.getTime()
+      : 0;
+    if (sinceFirstMs < MIN_GAP_MS) {
+      return NextResponse.json(
+        { error: "TOO_EARLY", retryInSec: Math.ceil((MIN_GAP_MS - sinceFirstMs) / 1000) },
+        { status: 400 }
+      );
+    }
+
     const duration = formatDuration(session.sleepAt.getTime(), now.getTime());
 
-    // FIX #2 (Critical): Use updateMany with optimistic concurrency guard.
-    // If confirm-second and mark-awake race, only the first one writes (count === 1).
-    // The second finds count === 0 and returns a graceful no-op response.
     const { count } = await db.sleepSession.updateMany({
-      where: {
-        id: session.id,
-        status: { not: "CONFIRMED" }, // guard — reject if already confirmed
-      },
+      where: { id: session.id, status: "FIRST_CONFIRMED" },
       data: {
         status: "CONFIRMED",
         secondConfirmedAt: now,
@@ -71,11 +80,18 @@ export async function POST(
     });
 
     if (count === 0) {
-      // Another concurrent request already confirmed — idempotent success
-      return NextResponse.json({ ok: true, alreadyConfirmed: true, status: "CONFIRMED" });
+      const after = await db.sleepSession.findUnique({ where: { id: session.id } });
+      if (after?.status === "CONFIRMED") {
+        // A friend's "I woke them" (or a double tap) won the race — idempotent success
+        return NextResponse.json({ ok: true, alreadyConfirmed: true, status: "CONFIRMED" });
+      }
+      return NextResponse.json(
+        { error: "STATE_CHANGED", status: after?.status ?? null },
+        { status: 409 }
+      );
     }
 
-    // We won the race — safe to update stats and send notifications
+    // We won — safe to update stats and send notifications
     const saver =
       session.tokens.find((wt) => wt.markedAwake) ??
       session.tokens.find((wt) => wt.committed) ??
@@ -99,18 +115,17 @@ export async function POST(
         : []),
     ]);
 
-    // Notify watchers
     const watcherPromises = session.tokens.map(async (wt) => {
       if (!wt.friend.telegramChatId) return;
+      const shownName =
+        session.privacyMode === "ANONYMOUS" ? "Someone" : session.user.name;
       await notifyWatcherConfirmed({
         chatId: wt.friend.telegramChatId,
-        sleeperName:
-          session.privacyMode === "ANONYMOUS" ? "Someone" : session.user.name,
+        sleeperName: shownName,
       });
       await sendFriendConversionPrompt({
         chatId: wt.friend.telegramChatId,
-        sleeperName:
-          session.privacyMode === "ANONYMOUS" ? "Someone" : session.user.name,
+        sleeperName: shownName,
       });
     });
 

@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { sendMessage, sendDebrief, sendFriendConversionPrompt, formatDuration } from "@/lib/telegram";
+import { sendMessage, sendDebrief, sendFriendConversionPrompt, formatDuration, escapeHtml } from "@/lib/telegram";
 
 export async function POST(req: NextRequest) {
   try {
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
     const { count } = await db.sleepSession.updateMany({
       where: {
         id: wt.sessionId,
-        status: { not: "CONFIRMED" }, // guard
+        status: { in: ["ALARM_FIRED", "FIRST_CONFIRMED", "ROUND_TWO"] }, // guard: only an in-progress alarm can be confirmed
       },
       data: {
         status: "CONFIRMED",
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
     if (wt.session.user.telegramChatId) {
       await sendMessage(
         wt.session.user.telegramChatId,
-        `☀️ ${wt.friend.name} confirmed you're awake. Session complete. Good morning!`
+        `☀️ ${escapeHtml(wt.friend.name)} confirmed you're awake. Session complete. Good morning!`
       );
       await sendDebrief({
         chatId: wt.session.user.telegramChatId,

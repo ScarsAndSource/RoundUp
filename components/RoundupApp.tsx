@@ -726,6 +726,9 @@ function SecondConfirm({ config, onConfirmed, onFailed }: {
   const [error, setError] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const { remaining, mins, secs, done } = useTimer(3 * 60 * 1000, !solved);
+  // The server enforces a 2-minute gap after the first tap, so the slider stays locked until then.
+  const unlockInMs = Math.max(0, 2 * 60 * 1000 - (3 * 60 * 1000 - remaining));
+  const locked = unlockInMs > 0;
   const onFailedRef = useRef(onFailed);
   useEffect(() => { onFailedRef.current = onFailed; }, [onFailed]);
 
@@ -735,7 +738,11 @@ function SecondConfirm({ config, onConfirmed, onFailed }: {
 
   const handleDragEnd = async () => {
     setDragging(false);
-    if (dragX > 200) {
+    if (locked) {
+      setDragX(0);
+      setError(true);
+      setTimeout(() => setError(false), 600);
+    } else if (dragX > 200) {
       setSolved(true);
       setConfirming(true);
       try {
@@ -766,7 +773,7 @@ function SecondConfirm({ config, onConfirmed, onFailed }: {
         <span style={{ fontSize: 12, color: "var(--text-2)" }}>remaining</span>
       </div>
       <div style={{ marginBottom: 24, padding: "32px 20px" }}>
-        <p style={{ textAlign: "center", fontSize: 14, color: "var(--text-2)", marginBottom: 24 }}>Slide all the way to confirm</p>
+        <p style={{ textAlign: "center", fontSize: 14, color: "var(--text-2)", marginBottom: 24 }}>{locked ? `🔒 Unlocks in ${fmt2(Math.floor(unlockInMs / 60000))}:${fmt2(Math.floor((unlockInMs % 60000) / 1000))} — stay awake` : "Slide all the way to confirm"}</p>
         <div style={{ position: "relative", height: 64, background: solved ? "var(--green-glow)" : error ? "var(--red-glow)" : "var(--surface)", border: `1.5px solid ${solved ? "var(--green)" : error ? "var(--red)" : "var(--border-2)"}`, borderRadius: 32, overflow: "hidden", animation: error ? "shake 0.5s ease" : "none" }}>
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", paddingLeft: dragX + 48, fontSize: 13, color: solved ? "var(--green)" : "var(--text-3)", pointerEvents: "none", transition: "none" }}>
             {solved ? "✓ Confirmed!" : "→ Slide to confirm"}

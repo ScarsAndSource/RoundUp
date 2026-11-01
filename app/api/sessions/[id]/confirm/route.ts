@@ -40,7 +40,10 @@ export async function POST(
     if (terminalSession) {
       // Return distinct error code so the UI shows "You're already awake" not "Link invalid"
       return NextResponse.json(
-        { error: "ALREADY_CONFIRMED", status: terminalSession.status },
+        {
+          error: terminalSession.status === "CONFIRMED" ? "ALREADY_CONFIRMED" : "SESSION_ENDED",
+          status: terminalSession.status,
+        },
         { status: 400 }
       );
     }
@@ -87,7 +90,7 @@ export async function POST(
     if (count === 0) {
       // Session ended (cancelled / failed / confirmed) between our read and write
       return NextResponse.json(
-        { error: "ALREADY_CONFIRMED", status: "CANCELLED" },
+        { error: "SESSION_ENDED", status: "CANCELLED" },
         { status: 400 }
       );
     }

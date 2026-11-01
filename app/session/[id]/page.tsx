@@ -56,6 +56,18 @@ export default function SessionConfirmPage() {
   const [dragging, setDragging] = useState(false);
   const [dragError, setDragError] = useState(false);
 
+  // Second proof is locked for 2 minutes after the first tap (the server enforces the same gap).
+  const [confirmedAtMs, setConfirmedAtMs] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (phase !== "second_confirm") return;
+    const iv = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [phase]);
+  const unlockInMs =
+    confirmedAtMs === null ? 0 : Math.max(0, 2 * 60 * 1000 - (nowMs - confirmedAtMs));
+  const locked = unlockInMs > 0;
+
   useEffect(() => {
     if (!token) {
       setErrorMsg("Confirmation link is missing the token parameter.");
@@ -64,7 +76,7 @@ export default function SessionConfirmPage() {
     }
 
     // Check current session status to decide which phase to show
-    fetch(`/api/sessions/${sessionId}/status`)
+    fetch(`/api/sessions/${sessionId}/status?token=${encodeURIComponent(token)}`)
       .then((r) => {
         if (!r.ok) throw new Error("not_found");
         return r.json();
@@ -75,6 +87,7 @@ export default function SessionConfirmPage() {
         } else if (["ALARM_FIRED", "ROUND_TWO"].includes(data.status)) {
           setPhase("ready_to_confirm");
         } else if (data.status === "FIRST_CONFIRMED") {
+          setConfirmedAtMs(data.confirmedAt ? new Date(data.confirmedAt).getTime() : Date.now());
           setPhase("second_confirm");
         } else {
           setErrorMsg(`Session is in state: ${data.status}. Nothing to confirm.`);
@@ -101,7 +114,11 @@ export default function SessionConfirmPage() {
 
       if (data.error === "ALREADY_CONFIRMED") {
         setPhase("already_confirmed");
+      } else if (data.error === "SESSION_ENDED") {
+        setErrorMsg("This session already ended (cancelled or timed out). Open Roundup to start a new one.");
+        setPhase("error");
       } else if (res.ok) {
+        setConfirmedAtMs(Date.now());
         setPhase("second_confirm");
       } else {
         setErrorMsg(data.error || "Something went wrong. Please try again.");
@@ -125,6 +142,13 @@ export default function SessionConfirmPage() {
       });
       const data = await res.json();
 
+      if (data.error === "TOO_EARLY") {
+        setDragX(0);
+        setDragError(true);
+        setTimeout(() => setDragError(false), 600);
+        return;
+      }
+
       if (res.ok || data.alreadyConfirmed) {
         setSaverName(data.saverName ?? null);
         setPhase("confirmed");
@@ -142,7 +166,11 @@ export default function SessionConfirmPage() {
 
   const handleDragEnd = async () => {
     setDragging(false);
-    if (dragX > 210) {
+    if (locked) {
+      setDragX(0);
+      setDragError(true);
+      setTimeout(() => setDragError(false), 600);
+    } else if (dragX > 210) {
       await handleSecondConfirm();
     } else {
       setDragX(0);
@@ -298,7 +326,9 @@ export default function SessionConfirmPage() {
             }}
           >
             <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", paddingLeft: dragX + 60, fontSize: 13, color: "var(--text-3)", pointerEvents: "none" }}>
-              → Slide all the way to confirm
+              {locked
+                ? `🔒 Unlocks in ${Math.floor(unlockInMs / 60000)}:${String(Math.floor((unlockInMs % 60000) / 1000)).padStart(2, "0")}`
+                : "→ Slide all the way to confirm"}
             </div>
             <div
               style={{
