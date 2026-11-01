@@ -1303,7 +1303,16 @@ export default function RoundupApp() {
           api.getHealth(),
           api.getSessions(5),
         ]);
-        if (profileResult.status === "fulfilled") setUserProfile(profileResult.value);
+        if (profileResult.status === "fulfilled") {
+          setUserProfile(profileResult.value);
+          // Keep the timezone used in Telegram messages in step with the browser's.
+          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          if (browserTz && browserTz !== profileResult.value.timezone) {
+            api.updateTimezone(browserTz)
+              .then((r) => setUserProfile((p) => (p ? { ...p, timezone: r.timezone } : p)))
+              .catch(() => { /* non-critical */ });
+          }
+        }
         if (friendsResult.status === "fulfilled") {
           setFriends(friendsResult.value.friends);
           setFriendsError(false);
@@ -1436,7 +1445,16 @@ export default function RoundupApp() {
       };
 
       saveSessionConfig(config);
-      showToast("Session created — crew notified 🌙", "success");
+      if (result.reachableWatchers !== undefined && result.reachableWatchers < result.watcherCount) {
+        showToast(
+          result.reachableWatchers === 0
+            ? "Session created — but none of your friends have linked Telegram, so nobody can be alerted."
+            : `Session created — only ${result.reachableWatchers} of ${result.watcherCount} friends can be alerted (the rest haven't linked Telegram).`,
+          "error"
+        );
+      } else {
+        showToast("Session created — crew notified 🌙", "success");
+      }
       setScreen("session_active");
     } catch (e) {
       if (e instanceof api.NetworkError) {

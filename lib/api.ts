@@ -150,3 +150,16 @@ export function getUserProfile(): Promise<UserProfile> {
 export function getHealth(): Promise<HealthStatus> {
   return apiFetch("/api/health");
 }
+
+// ── Timezone sync ──────────────────────────────────────────────────────
+// Wake times are picked in the browser's timezone; this keeps the timezone used in Telegram
+// messages in step with it (it used to be stuck on Asia/Kolkata for everyone).
+
+export function updateTimezone(
+  timezone: string
+): Promise<{ timezone: string; privacyDefault: string }> {
+  return apiFetch("/api/user", {
+    method: "PATCH",
+    body: JSON.stringify({ timezone }),
+  });
+}

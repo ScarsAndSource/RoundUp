@@ -59,6 +59,22 @@ export function createSupabaseServerClient() {
 
 // ── Auth helper — get or create DB user from session ─────────────────
 
+// Creates the DB user for a first sign-in. On first load the app fires several API calls at
+// once, so two of them can try to create the same user: the loser hits the unique constraint
+// (supabaseId) and used to fail with a 500. Now it just re-reads the row the winner created.
+async function createOrFetchUser(
+  supabaseId: string,
+  args: { data: { supabaseId: string; email: string; name: string } }
+) {
+  try {
+    return await db.user.create(args);
+  } catch (err) {
+    const existing = await db.user.findUnique({ where: { supabaseId } });
+    if (existing) return existing;
+    throw err;
+  }
+}
+
 export async function getOrCreateUser() {
   const supabase = createSupabaseServerClient();
 
@@ -100,7 +116,7 @@ export async function getOrCreateUser() {
       email.split("@")[0] ??
       "Roundup User";
 
-    user = await db.user.create({
+    user = await createOrFetchUser(authUser.id, {
       data: {
         supabaseId: authUser.id,
         email,

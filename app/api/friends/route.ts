@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getOrCreateUser, ServiceUnavailableError } from "@/lib/supabase";
 import type { CreateFriendRequest, FriendPublic } from "@/types";
+import { isValidTimezone } from "@/lib/validate";
 
 // GET — list user's friends, sorted by most helpful
 export async function GET() {
@@ -56,14 +57,29 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const user = await getOrCreateUser();
-    const body: CreateFriendRequest = await req.json();
+    let body: Partial<CreateFriendRequest>;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Request body must be valid JSON" }, { status: 400 });
+    }
     const { name, phone, channel = "TELEGRAM", timezone = "Asia/Kolkata" } = body;
 
-    if (!name || name.trim().length < 1) {
+    if (typeof name !== "string" || name.trim().length < 1) {
       return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
     if (name.trim().length > 50) {
       return NextResponse.json({ error: "Name too long" }, { status: 400 });
+    }
+
+    if (!["TELEGRAM", "WHATSAPP", "SMS", "PUSH"].includes(channel)) {
+      return NextResponse.json({ error: "Invalid channel" }, { status: 400 });
+    }
+    if (typeof timezone !== "string" || !isValidTimezone(timezone)) {
+      return NextResponse.json({ error: "Invalid timezone" }, { status: 400 });
+    }
+    if (phone !== undefined && phone !== null && typeof phone !== "string") {
+      return NextResponse.json({ error: "Invalid phone" }, { status: 400 });
     }
 
     const existingCount = await db.friend.count({ where: { ownerId: user.id } });

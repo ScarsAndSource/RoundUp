@@ -36,6 +36,7 @@ export interface CreateSessionResponse {
   confirmToken: string;
   openWatchToken?: string;
   watcherCount: number;
+  reachableWatchers?: number; // how many of them have Telegram linked (can actually be alerted)
 }
 
 export interface CreateFriendRequest {
