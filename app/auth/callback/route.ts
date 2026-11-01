@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 export async function GET(req: NextRequest) {
@@ -14,9 +14,10 @@ export async function GET(req: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          get: (name) => cookieStore.get(name)?.value,
-          set: (name, value, opts) => cookieStore.set({ name, value, ...opts }),
-          remove: (name, opts) =>
+          get: (name: string) => cookieStore.get(name)?.value,
+          set: (name: string, value: string, opts: CookieOptions) =>
+            cookieStore.set({ name, value, ...opts }),
+          remove: (name: string, opts: CookieOptions) =>
             cookieStore.set({ name, value: "", ...opts }),
         },
       }

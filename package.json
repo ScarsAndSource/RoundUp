@@ -8,7 +8,8 @@
     "start": "next start",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "telegram:webhook": "node scripts/set-webhook.mjs"
   },
   "dependencies": {
     "next": "14.2.5",

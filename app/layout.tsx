@@ -1,9 +1,18 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "@/app/globals.css";
 
 export const metadata: Metadata = {
   title: "Roundup",
   description: "Your crew makes sure you actually wake up.",
+  manifest: "/manifest.json",
+  icons: { icon: "/icons/icon-192.png", apple: "/icons/icon-192.png" },
+  appleWebApp: { capable: true, title: "Roundup", statusBarStyle: "black-translucent" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#0a0b0f",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({
