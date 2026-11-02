@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Roundup Alarm Lab</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 16px 48px; background: #0a0b0f; color: #e8e8ea;
+         font: 15px/1.45 system-ui, -apple-system, Roboto, sans-serif; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #8b8d98; margin: 0 0 10px; }
+  p.muted, .muted { color: #8b8d98; font-size: 13px; }
+  section { background: #14161d; border: 1px solid #23262f; border-radius: 14px; padding: 14px; margin-top: 14px; }
+  button { font: inherit; color: #fff; background: #2a2e3a; border: 0; border-radius: 10px;
+           padding: 10px 12px; margin: 0 6px 8px 0; }
+  button.primary { background: #2e7d32; }
+  button.warn { background: #b26a00; }
+  button.danger { background: #8e2b2b; }
+  input[type=text], input[type=time] { font: inherit; color: #fff; background: #0e1016; border: 1px solid #2a2e3a;
+           border-radius: 10px; padding: 10px; width: 100%; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #1e212a; }
+  .row:last-child { border-bottom: 0; }
+  .ok { color: #66bb6a; } .bad { color: #ff6e6e; font-weight: 600; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 ui-monospace, Menlo, monospace; }
+  #log { max-height: 260px; overflow: auto; background: #0e1016; border-radius: 10px; padding: 10px; }
+  ol { padding-left: 20px; margin: 0; } li { margin-bottom: 6px; }
+  .warnbox { background: #2a1f0a; border: 1px solid #5a4210; color: #f3d28a; border-radius: 10px; padding: 10px; margin-top: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<h1>Roundup · Alarm Lab</h1>
+<p class="muted">Prototype: does the native alarm ring reliably on every phone you care about?</p>
+<div id="nonative" class="warnbox" style="display:none">
+  Not running inside the native app (window.Capacitor is missing). Open this from the installed APK.
+</div>
+
+<section>
+  <h2>1 · Permissions &amp; device</h2>
+  <div id="status" class="muted">loading…</div>
+  <div id="oem" class="warnbox" style="display:none"></div>
+  <div style="margin-top:10px">
+    <button onclick="doRefresh()">Refresh</button>
+    <button class="primary" onclick="doNotifications()">Allow notifications</button>
+    <button onclick="openSetting('exactAlarm')">Exact alarms</button>
+    <button onclick="openSetting('fullScreenIntent')">Full-screen alarm</button>
+    <button onclick="openSetting('battery')">Battery</button>
+    <button onclick="openSetting('app')">App settings</button>
+  </div>
+</section>
+
+<section>
+  <h2>2 · Schedule a test alarm</h2>
+  <input id="label" type="text" placeholder="Label (optional)" value="Test alarm">
+  <div>
+    <button class="primary" onclick="scheduleIn(20)">in 20 s</button>
+    <button class="primary" onclick="scheduleIn(60)">in 1 min</button>
+    <button class="primary" onclick="scheduleIn(120)">in 2 min</button>
+    <button class="primary" onclick="scheduleIn(300)">in 5 min</button>
+  </div>
+  <div class="muted" style="margin:6px 0">…or at a time of day (next occurrence):</div>
+  <input id="tod" type="time">
+  <button class="primary" onclick="scheduleAtTime()">Schedule at that time</button>
+</section>
+
+<section>
+  <h2>3 · Scheduled alarms</h2>
+  <div id="alarms" class="muted">none</div>
+  <button class="danger" onclick="cancelAll()">Cancel all</button>
+  <button onclick="stopRinging()">Stop ringing now</button>
+</section>
+
+<section>
+  <h2>4 · Event log</h2>
+  <div id="log"><pre id="logtext">(empty)</pre></div>
+  <button style="margin-top:8px" onclick="clearLog()">Clear log</button>
+</section>
+
+<section>
+  <h2>5 · What to test (per phone)</h2>
+  <ol>
+    <li>Screen on, app open → alarm rings, notification appears.</li>
+    <li>Screen locked → the full-screen alarm turns the screen on and rings.</li>
+    <li>Swipe the app away from recents, lock the phone → still rings.</li>
+    <li>Unplugged, screen off for 30+ minutes (Doze) → rings on time.</li>
+    <li>Battery saver ON, then Do Not Disturb ON, then silent/vibrate mode → still rings.</li>
+    <li>Bluetooth headphones connected, phone volume low → rings loudly.</li>
+    <li>Schedule 10 minutes out, reboot the phone → alarm still rings (log shows “rescheduled”).</li>
+    <li>Tap “I'M AWAKE” → silence, then the second check rings 2 minutes later. Hold 3 s → “confirmed”.</li>
+    <li>Do nothing → rings until the 10-minute limit (“ring_timeout”).</li>
+    <li>Force-stop the app in Settings → will NOT ring (Android cancels it). The server catches this case.</li>
+  </ol>
+  <p class="muted">Write down for each phone: model, Android version, which steps failed. Xiaomi / Oppo / Vivo /
+  Realme / OnePlus usually need autostart + “no restrictions” battery mode.</p>
+</section>
+
+<script>
+  var Cap = window.Capacitor;
+  var A = (Cap && Cap.registerPlugin) ? Cap.registerPlugin('RoundupAlarm') : null;
+  if (!A) { document.getElementById('nonative').style.display = 'block'; }
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]; }); }
+  function fmt(t) { return new Date(t).toLocaleString(); }
+  function msg(e) { return (e && (e.message || e.errorMessage)) || JSON.stringify(e); }
+
+  function row(label, ok, extra) {
+    return '<div class="row"><span>' + label + '</span><span class="' + (ok ? 'ok' : 'bad') + '">' +
+           (ok ? '✓ OK' : '✗ ' + (extra || 'needs fixing')) + '</span></div>';
+  }
+
+  async function doRefresh() {
+    if (!A) return;
+    try {
+      var s = await A.status();
+      var h = '';
+      h += row('Exact alarms', s.canScheduleExactAlarms, 'tap “Exact alarms”');
+      h += row('Notifications', s.notificationsEnabled, 'tap “Allow notifications”');
+      h += row('Full-screen alarm over lock screen', s.canUseFullScreenIntent, 'tap “Full-screen alarm”');
+      h += row('Battery: not restricted', s.ignoringBatteryOptimizations, 'tap “Battery”, allow');
+      h += '<div class="muted" style="margin-top:8px">' + esc(s.manufacturer) + ' ' + esc(s.model) +
+           ' · Android API ' + esc(s.sdkInt) + '</div>';
+      $('status').innerHTML = h;
+
+      var oem = $('oem');
+      if (/xiaomi|redmi|poco|oppo|realme|vivo|oneplus|huawei|honor|samsung|infinix|tecno|itel/i.test(s.manufacturer)) {
+        oem.style.display = 'block';
+        oem.textContent = s.manufacturer + ' phones often kill background apps. In system settings also allow ' +
+          '“Autostart” and set this app’s battery mode to “No restrictions” / “Don’t optimise”, ' +
+          'and lock the app in the recents screen if your phone has that option.';
+      } else { oem.style.display = 'none'; }
+    } catch (e) { $('status').textContent = 'status failed: ' + msg(e); }
+  }
+
+  async function doNotifications() {
+    if (!A) return;
+    try { await A.requestNotifications(); } catch (e) { alert(msg(e)); }
+    doRefresh();
+  }
+
+  async function openSetting(type) {
+    if (!A) return;
+    try { await A.openSettings({ type: type }); } catch (e) { alert(msg(e)); }
+  }
+
+  async function schedule(at) {
+    if (!A) return;
+    var id = 'test-' + Date.now();
+    try {
+      await A.schedule({ id: id, triggerAtMillis: at, phase: 'RING', label: $('label').value || '' });
+    } catch (e) {
+      if (e && e.code === 'EXACT_ALARM_PERMISSION_MISSING') {
+        alert('Exact alarms are not allowed yet. Opening the setting…');
+        openSetting('exactAlarm');
+      } else { alert(msg(e)); }
+    }
+    refreshAlarms(); refreshLog();
+  }
+
+  function scheduleIn(seconds) { schedule(Date.now() + seconds * 1000); }
+
+  function scheduleAtTime() {
+    var v = $('tod').value;
+    if (!v) { alert('Pick a time first'); return; }
+    var p = v.split(':');
+    var d = new Date();
+    d.setHours(parseInt(p[0], 10), parseInt(p[1], 10), 0, 0);
+    if (d.getTime() <= Date.now() + 5000) d.setDate(d.getDate() + 1);
+    schedule(d.getTime());
+  }
+
+  async function refreshAlarms() {
+    if (!A) return;
+    try {
+      var r = await A.listAlarms();
+      var list = r.alarms || [];
+      if (!list.length) { $('alarms').textContent = 'none'; return; }
+      list.sort(function (a, b) { return a.triggerAtMillis - b.triggerAtMillis; });
+      $('alarms').innerHTML = list.map(function (a) {
+        return '<div class="row"><span>' + esc(fmt(a.triggerAtMillis)) + ' · ' + esc(a.phase) +
+               '<br><span class="muted">' + esc(a.id) + '</span></span>' +
+               '<button class="danger" onclick="cancelOne(\'' + esc(a.id).replace(/'/g, '') + '\')">Cancel</button></div>';
+      }).join('');
+    } catch (e) { $('alarms').textContent = 'list failed: ' + msg(e); }
+  }
+
+  async function cancelOne(id) { try { await A.cancel({ id: id }); } catch (e) { alert(msg(e)); } refreshAlarms(); refreshLog(); }
+  async function cancelAll() { try { await A.cancelAll(); } catch (e) { alert(msg(e)); } refreshAlarms(); refreshLog(); }
+  async function stopRinging() { try { await A.stopAlarm(); } catch (e) { alert(msg(e)); } }
+
+  function line(e) {
+    return new Date(e.at).toLocaleTimeString() + '  ' + e.type + (e.id ? '  [' + e.id + ']' : '') + (e.phase ? '  ' + e.phase : '');
+  }
+  async function refreshLog() {
+    if (!A) return;
+    try {
+      var r = await A.getEvents();
+      var ev = r.events || [];
+      $('logtext').textContent = ev.length ? ev.slice().reverse().map(line).join('\n') : '(empty)';
+    } catch (e) { $('logtext').textContent = 'log failed: ' + msg(e); }
+  }
+  async function clearLog() { try { await A.clearEvents(); } catch (e) {} refreshLog(); }
+
+  function refreshAll() { doRefresh(); refreshAlarms(); refreshLog(); }
+
+  if (A) {
+    A.addListener('alarmEvent', function () { refreshAlarms(); refreshLog(); });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') refreshAll(); });
+    refreshAll();
+  }
+</script>
+</body>
+</html>
